@@ -1,0 +1,71 @@
+pipeline {
+    agent any
+
+    tools {
+        nodejs "Node 18" // Must match Manage Jenkins → Tools → NodeJS installations
+    }
+
+    environment {
+        EC2_USER = "ec2-user"               // Change to 'ubuntu' if needed
+        EC2_HOST = "13.201.71.211"          // Public IP or DNS
+        EC2_PATH = "/home/ec2-user/jenkins" // Deployment directory on EC2
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    credentialsId: '7243f613-7608-4328-97ed-da54cc32ccb7',
+                    url: 'https://gitlab.com/ITMheptagon/jenkins.git'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'npm test'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'cc32cf60-9256-446b-b6a7-a7accb97c597', keyFileVariable: 'SSH_KEY')]) {
+                    sh """
+                        # Create app directory on EC2
+                        ssh -i $SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST "mkdir -p $EC2_PATH"
+
+                        # Copy latest code to EC2
+                        scp -i $SSH_KEY -o StrictHostKeyChecking=no index.js package.json $EC2_USER@$EC2_HOST:$EC2_PATH
+
+                        # Install dependencies & restart app with PM2
+                        ssh -i $SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST '
+                            cd $EC2_PATH && npm install
+                            if ! command -v pm2 &> /dev/null; then
+                                sudo npm install -g pm2
+                            fi
+                            pm2 start ./index.js --name hello-jenkins --update-env || pm2 restart hello-jenkins
+                        '
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline completed!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+        success {
+            echo 'Pipeline succeeded!'
+        }
+    }
+}
+
